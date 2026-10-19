@@ -1,10 +1,10 @@
-name: LabsCode Lite portable build
+name: LabsCode portable build
 
 on:
   workflow_dispatch:
   push:
     branches: [lite]
-    paths: ['lite/**', 'product.json', '.github/workflows/lite-build.yml']
+    paths: ['lite/**', 'full/**', 'extensions/labscode-extras/**', 'build/**', 'product.json', '.github/workflows/lite-build.yml']
 
 permissions:
   contents: write
@@ -14,16 +14,14 @@ env:
   # Upstream's Linux toolchain setup (setup-env.sh) and native module builds read these.
   VSCODE_ARCH: x64
   npm_config_arch: x64
-  # Extensions removed from the lite build (Copilot, test fixtures, tunnels).
-  # They are removed from the packaged app after the build: the gulp build lists
-  # extension sources explicitly, so deleting them beforehand breaks compilation.
-  STRIP_EXTENSIONS: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver tunnel-forwarding
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, ubuntu-24.04]
+        edition: [lite, full]
         include:
           - os: windows-latest
             target: win32-x64
@@ -31,6 +29,17 @@ jobs:
           - os: ubuntu-24.04
             target: linux-x64
             launcher: labscode.sh
+          # Lite: no Copilot, test fixtures, tunnels or LabsCode Extras.
+          - edition: lite
+            package: LabsCode-Lite
+            name_long: LabsCode Lite
+            strip: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver tunnel-forwarding labscode-extras
+          # Full: everything upstream ships, plus LabsCode Extras (themes and features).
+          - edition: full
+            package: LabsCode
+            name_long: LabsCode
+            strip: vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver
+    name: build (${{ matrix.edition }}, ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
@@ -63,19 +72,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set product name
+        shell: bash
+        run: node -e "const f='product.json',p=JSON.parse(require('fs').readFileSync(f));p.nameLong='${{ matrix.name_long }}';require('fs').writeFileSync(f,JSON.stringify(p,null,'\t'))"
+
       - name: Build
         shell: bash
         run: npm run gulp vscode-${{ matrix.target }}-min
+        env:
+          # Built-in extensions (js-debug etc.) are fetched from the GitHub API; unauthenticated calls hit the rate limit.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Unwanted extensions are removed from the packaged app after the build: the gulp
+      # build lists extension sources explicitly, so deleting them beforehand breaks it.
       - name: Assemble portable folder
         shell: bash
         run: |
           set -e
           mkdir -p dist
           mv ../VSCode-${{ matrix.target }} dist/LabsCode
-          for e in $STRIP_EXTENSIONS; do rm -rf "dist/LabsCode/resources/app/extensions/$e"; done
+          for e in ${{ matrix.strip }}; do rm -rf "dist/LabsCode/resources/app/extensions/$e"; done
           mkdir -p dist/LabsCode/data/user-data/User dist/LabsCode/data/extensions
-          cp lite/settings.json dist/LabsCode/data/user-data/User/settings.json
+          cp ${{ matrix.edition }}/settings.json dist/LabsCode/data/user-data/User/settings.json
           cp lite/${{ matrix.launcher }} dist/
           if [ "$RUNNER_OS" = "Windows" ]; then cp lite/install-deps.bat dist/; fi
           chmod +x dist/*.sh 2>/dev/null || true
@@ -97,19 +115,20 @@ jobs:
         run: |
           cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then
-            7z a -tzip ../LabsCode-Lite-${{ matrix.target }}.zip .
+            7z a -tzip ../${{ matrix.package }}-${{ matrix.target }}.zip .
           else
-            tar -czf ../LabsCode-Lite-${{ matrix.target }}.tar.gz .
+            tar -czf ../${{ matrix.package }}-${{ matrix.target }}.tar.gz .
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: LabsCode-Lite-${{ matrix.target }}
-          path: LabsCode-Lite-${{ matrix.target }}.*
+          name: ${{ matrix.package }}-${{ matrix.target }}
+          path: ${{ matrix.package }}-${{ matrix.target }}.*
 
   release:
     needs: build
-    if: always() && contains(needs.build.result, 'success')
+    # Publish whichever editions built; one failing leg doesn't hold back the rest.
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -118,8 +137,13 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: lite-beta-${{ github.run_number }}
-          name: LabsCode Lite beta ${{ github.run_number }}
+          tag_name: labscode-beta-${{ github.run_number }}
+          name: LabsCode beta ${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           prerelease: true
+          body: |
+            Beta builds. Extract anywhere and run the launcher; settings and extensions stay in the folder.
+            - **LabsCode**: light red LabsCode Light/Dark themes (follow the system setting), focus timer, today's edit tally, scratchpad and red-pen TODO markers.
+            - **LabsCode Lite**: no Copilot, telemetry, updates or extras.
           files: out/*
+          fail_on_unmatched_files: true

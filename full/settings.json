@@ -1,0 +1,9 @@
+{
+	// LabsCode defaults: light red LabsCode themes that follow the system light/dark setting.
+	"workbench.colorTheme": "LabsCode Dark",
+	"workbench.preferredDarkColorTheme": "LabsCode Dark",
+	"workbench.preferredLightColorTheme": "LabsCode Light",
+	"window.autoDetectColorScheme": true,
+	"telemetry.telemetryLevel": "off",
+	"update.mode": "none"
+}
