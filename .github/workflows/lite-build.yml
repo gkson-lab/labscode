@@ -60,6 +60,7 @@ jobs:
           mkdir -p dist/LabsCode/data/user-data/User dist/LabsCode/data/extensions
           cp lite/settings.json dist/LabsCode/data/user-data/User/settings.json
           cp lite/${{ matrix.launcher }} dist/
+          if [ "$RUNNER_OS" = "Windows" ]; then cp lite/install-deps.bat dist/; fi
           chmod +x dist/*.sh 2>/dev/null || true
 
       - name: Bundle Claude Code extension (from Open VSX)
