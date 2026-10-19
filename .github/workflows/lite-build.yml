@@ -23,13 +23,15 @@ jobs:
           - os: windows-latest
             target: win32-x64
             launcher: labscode.bat
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: linux-x64
             launcher: labscode.sh
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: actions/setup-node@v4
         with:
@@ -37,11 +39,24 @@ jobs:
 
       - name: Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-3-0 libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev libgbm1
+
+      - name: Install build tool dependencies
+        shell: bash
+        working-directory: build
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         shell: bash
-        run: npm ci
+        run: |
+          set -e
+          # Upstream's toolchain setup (sysroot/compiler flags) for native modules on Linux
+          if [ "$RUNNER_OS" = "Linux" ]; then source ./build/azure-pipelines/linux/setup-env.sh; fi
+          npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Strip unneeded extensions
         shell: bash
