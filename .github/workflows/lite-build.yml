@@ -11,7 +11,12 @@ permissions:
 
 env:
   NODE_OPTIONS: --max-old-space-size=8192
+  # Upstream's Linux toolchain setup (setup-env.sh) and native module builds read these.
+  VSCODE_ARCH: x64
+  npm_config_arch: x64
   # Extensions removed from the lite build (Copilot, test fixtures, tunnels).
+  # They are removed from the packaged app after the build: the gulp build lists
+  # extension sources explicitly, so deleting them beforehand breaks compilation.
   STRIP_EXTENSIONS: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver tunnel-forwarding
 
 jobs:
@@ -58,10 +63,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Strip unneeded extensions
-        shell: bash
-        run: for e in $STRIP_EXTENSIONS; do rm -rf "extensions/$e"; done
-
       - name: Build
         shell: bash
         run: npm run gulp vscode-${{ matrix.target }}-min
@@ -72,6 +73,7 @@ jobs:
           set -e
           mkdir -p dist
           mv ../VSCode-${{ matrix.target }} dist/LabsCode
+          for e in $STRIP_EXTENSIONS; do rm -rf "dist/LabsCode/resources/app/extensions/$e"; done
           mkdir -p dist/LabsCode/data/user-data/User dist/LabsCode/data/extensions
           cp lite/settings.json dist/LabsCode/data/user-data/User/settings.json
           cp lite/${{ matrix.launcher }} dist/
@@ -116,7 +118,8 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: lite-${{ github.run_number }}
-          name: LabsCode Lite build ${{ github.run_number }}
+          tag_name: lite-beta-${{ github.run_number }}
+          name: LabsCode Lite beta ${{ github.run_number }}
           target_commitish: ${{ github.sha }}
+          prerelease: true
           files: out/*
