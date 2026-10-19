@@ -1,0 +1,106 @@
+name: LabsCode Lite portable build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [lite]
+    paths: ['lite/**', 'product.json', '.github/workflows/lite-build.yml']
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: --max-old-space-size=8192
+  # Extensions removed from the lite build (Copilot, test fixtures, tunnels).
+  STRIP_EXTENSIONS: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver tunnel-forwarding
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+            launcher: labscode.bat
+          - os: ubuntu-22.04
+            target: linux-x64
+            launcher: labscode.sh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Strip unneeded extensions
+        shell: bash
+        run: for e in $STRIP_EXTENSIONS; do rm -rf "extensions/$e"; done
+
+      - name: Build
+        shell: bash
+        run: npm run gulp vscode-${{ matrix.target }}-min
+
+      - name: Assemble portable folder
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          mv ../VSCode-${{ matrix.target }} dist/LabsCode
+          mkdir -p dist/LabsCode/data/user-data/User dist/LabsCode/data/extensions
+          cp lite/settings.json dist/LabsCode/data/user-data/User/settings.json
+          cp lite/${{ matrix.launcher }} dist/
+          chmod +x dist/*.sh 2>/dev/null || true
+
+      - name: Bundle Claude Code extension (from Open VSX)
+        shell: bash
+        run: |
+          set -e
+          url=$(curl -fsSL https://open-vsx.org/api/anthropic/claude-code/latest | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).files.download))")
+          curl -fsSL "$url" -o claude-code.vsix
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./dist/LabsCode/bin/code-oss.cmd --install-extension claude-code.vsix --extensions-dir dist/LabsCode/data/extensions
+          else
+            ./dist/LabsCode/bin/code-oss --install-extension claude-code.vsix --extensions-dir dist/LabsCode/data/extensions
+          fi
+
+      - name: Zip
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip ../LabsCode-Lite-${{ matrix.target }}.zip .
+          else
+            tar -czf ../LabsCode-Lite-${{ matrix.target }}.tar.gz .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LabsCode-Lite-${{ matrix.target }}
+          path: LabsCode-Lite-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    if: always() && contains(needs.build.result, 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lite-${{ github.run_number }}
+          name: LabsCode Lite build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          files: out/*
