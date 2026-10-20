@@ -473,9 +473,10 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 }
 
 function hasAuthenticodeSignature(filePath: string): Promise<boolean> {
-	return new Promise((resolve, reject) => {
+	return new Promise(resolve => {
 		const proc = cp.spawn('signtool.exe', ['verify', '/pa', filePath]);
-		proc.on('error', reject);
+		// LabsCode: GitHub runners have no signtool on PATH; treat files as unsigned.
+		proc.on('error', () => resolve(false));
 		proc.on('exit', code => resolve(code === 0));
 	});
 }
@@ -558,8 +559,9 @@ function prepareCopilotRipgrepShimTask(platform: string, arch: string, destinati
 		const appNodeModulesDir = path.join(appBase, 'node_modules.asar.unpacked');
 
 		const builtInCopilotExtensionDir = path.join(appBase, 'extensions', 'copilot');
-		// LabsCode: copilot is in excludedExtensions, so local builds don't package it.
-		if (!fs.existsSync(builtInCopilotExtensionDir)) {
+		// LabsCode: local builds package copilot without its SDK (upstream adds it in a
+		// separate pipeline), so there is nothing to shim. The workflow strips copilot.
+		if (!fs.existsSync(path.join(builtInCopilotExtensionDir, 'node_modules', '@github', 'copilot', 'sdk'))) {
 			return;
 		}
 		prepareBuiltInCopilotRipgrepShim(platform, arch, builtInCopilotExtensionDir, appNodeModulesDir);

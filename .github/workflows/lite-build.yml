@@ -35,10 +35,11 @@ jobs:
             name_long: LabsCode Lite
             strip: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver tunnel-forwarding labscode-extras
           # Full: everything upstream ships, plus LabsCode Extras (themes and features).
+          # Copilot is stripped here too: local builds can't package its SDK, so it wouldn't run.
           - edition: full
             package: LabsCode
             name_long: LabsCode
-            strip: vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver
+            strip: copilot vscode-api-tests vscode-colorize-tests vscode-colorize-perf-tests vscode-test-resolver
     name: build (${{ matrix.edition }}, ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
@@ -144,6 +145,7 @@ jobs:
           body: |
             Beta builds. Extract anywhere and run the launcher; settings and extensions stay in the folder.
             - **LabsCode**: light red LabsCode Light/Dark themes (follow the system setting), focus timer, today's edit tally, scratchpad and red-pen TODO markers.
-            - **LabsCode Lite**: no Copilot, telemetry, updates or extras.
+            - **LabsCode Lite**: no telemetry, updates or extras.
+            Neither edition includes the built-in Copilot. Both bundle the Claude Code extension.
           files: out/*
           fail_on_unmatched_files: true
