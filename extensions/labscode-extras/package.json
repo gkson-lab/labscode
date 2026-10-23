@@ -2,7 +2,7 @@
   "name": "labscode-extras",
   "displayName": "LabsCode Extras",
   "description": "LabsCode Light and Dark themes, a focus timer, today's edit tally, a scratchpad and red-pen TODO markers.",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publisher": "gklabs",
   "license": "MIT",
   "engines": {
@@ -72,7 +72,7 @@
         "labscode.redPen.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Underline TODO, FIXME and HACK markers in light red."
+          "description": "Show TODO, FIXME and HACK markers in bold light red."
         }
       }
     }

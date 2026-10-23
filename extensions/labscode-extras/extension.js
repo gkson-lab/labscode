@@ -9,14 +9,17 @@ function focusTimer(context) {
 	const item = vscode.window.createStatusBarItem('labscode.focus', vscode.StatusBarAlignment.Right, 100);
 	item.name = 'LabsCode Focus Timer';
 	item.command = 'labscode.focus.toggle';
-	let endAt = 0;
-	let minutes = 0;
+	// The session end time is kept in globalState so a window reload doesn't cancel a running session.
+	let { endAt, minutes } = context.globalState.get('labscode.focus', { endAt: 0, minutes: 0 });
 	let tick;
+
+	// settings.json edits bypass the schema's minimum and maximum, so clamp here.
+	const sessionMinutes = () => Math.min(240, Math.max(1, Number(config().get('focus.minutes')) || 25));
 
 	const render = () => {
 		if (!endAt) {
 			item.text = '$(watch) Focus';
-			item.tooltip = `Start a ${config().get('focus.minutes')}-minute focus session`;
+			item.tooltip = `Start a ${sessionMinutes()}-minute focus session`;
 			return;
 		}
 		const left = Math.max(0, Math.round((endAt - Date.now()) / 1000));
@@ -24,15 +27,18 @@ function focusTimer(context) {
 		item.tooltip = 'Focus session running. Click to stop.';
 		if (left === 0) finish();
 	};
+	const persist = () => context.globalState.update('labscode.focus', { endAt, minutes });
 	const stop = () => {
 		clearInterval(tick);
 		endAt = 0;
+		persist();
 		render();
 	};
 	const start = () => {
 		clearInterval(tick);
-		minutes = config().get('focus.minutes');
+		minutes = sessionMinutes();
 		endAt = Date.now() + minutes * 60_000;
+		persist();
 		tick = setInterval(render, 1000);
 		render();
 	};
@@ -48,6 +54,7 @@ function focusTimer(context) {
 		vscode.commands.registerCommand('labscode.focus.toggle', () => (endAt ? stop() : start())),
 		vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('labscode.focus') && render()),
 	);
+	if (endAt) tick = setInterval(render, 1000);
 	render();
 	item.show();
 }
@@ -60,6 +67,7 @@ function editTally(context) {
 	const today = () => new Date().toLocaleDateString('en-CA');
 	let tally = context.globalState.get('labscode.tally', { date: today(), added: 0, removed: 0 });
 	let saveTimer;
+	let midnightTimer;
 
 	const render = () => {
 		if (tally.date !== today()) tally = { date: today(), added: 0, removed: 0 };
@@ -71,20 +79,40 @@ function editTally(context) {
 		clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => context.globalState.update('labscode.tally', tally), 2000);
 	};
+	// Without this the item kept showing yesterday's numbers until the first edit after midnight.
+	const scheduleMidnight = () => {
+		const next = new Date();
+		next.setHours(24, 0, 1, 0);
+		midnightTimer = setTimeout(() => {
+			render();
+			save();
+			scheduleMidnight();
+		}, next - Date.now());
+	};
 
 	context.subscriptions.push(
 		item,
-		{ dispose: () => context.globalState.update('labscode.tally', tally) },
+		{ dispose: () => { clearTimeout(midnightTimer); context.globalState.update('labscode.tally', tally); } },
 		vscode.workspace.onDidChangeTextDocument((e) => {
 			if (!['file', 'untitled', 'vscode-userdata'].includes(e.document.uri.scheme)) return;
 			if (e.reason === vscode.TextDocumentChangeReason.Undo || e.reason === vscode.TextDocumentChangeReason.Redo) return;
-			if (tally.date !== today()) tally = { date: today(), added: 0, removed: 0 };
+			let added = 0;
+			let removed = 0;
 			for (const change of e.contentChanges) {
-				tally.removed += change.range.end.line - change.range.start.line;
-				tally.added += change.text.split('\n').length - 1;
+				removed += change.range.end.line - change.range.start.line;
+				added += change.text.split('\n').length - 1;
 			}
-			render();
-			save();
+			if (!added && !removed) return;
+			// A reload from disk (git checkout, an external tool) leaves the file clean and is not an edit. isDirty lags
+			// one event behind (still false for the first edit after a save), so check it once it has caught up.
+			setTimeout(() => {
+				if (!e.document.isDirty) return;
+				if (tally.date !== today()) tally = { date: today(), added: 0, removed: 0 };
+				tally.added += added;
+				tally.removed += removed;
+				render();
+				save();
+			}, 300);
 		}),
 		vscode.commands.registerCommand('labscode.tally.reset', () => {
 			tally = { date: today(), added: 0, removed: 0 };
@@ -93,6 +121,7 @@ function editTally(context) {
 		}),
 		vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('labscode.tally') && render()),
 	);
+	scheduleMidnight();
 	render();
 }
 
@@ -113,7 +142,7 @@ function scratchpad(context) {
 	);
 }
 
-/** Marks TODO, FIXME and HACK in light red so they don't get lost. */
+/** Marks TODO, FIXME and HACK in bold light red so they don't get lost. */
 function redPen(context) {
 	const marker = vscode.window.createTextEditorDecorationType({
 		fontWeight: 'bold',
@@ -123,15 +152,17 @@ function redPen(context) {
 		overviewRulerLane: vscode.OverviewRulerLane.Right,
 	});
 	const pattern = /\b(TODO|FIXME|HACK)\b/g;
+	// Every document edited since the last repaint; tracking only the latest one left the others stale.
+	const pendingDocs = new Set();
 	let pending;
 
 	const paint = (editor) => {
 		const doc = editor.document;
-		if (!config().get('redPen.enabled') || doc.getText().length > 2_000_000) {
+		const text = doc.getText();
+		if (!config().get('redPen.enabled') || text.length > 2_000_000) {
 			editor.setDecorations(marker, []);
 			return;
 		}
-		const text = doc.getText();
 		const ranges = [];
 		for (const m of text.matchAll(pattern)) {
 			ranges.push(new vscode.Range(doc.positionAt(m.index), doc.positionAt(m.index + m[0].length)));
@@ -145,8 +176,12 @@ function redPen(context) {
 		{ dispose: () => clearTimeout(pending) },
 		vscode.window.onDidChangeVisibleTextEditors(paintVisible),
 		vscode.workspace.onDidChangeTextDocument((e) => {
+			pendingDocs.add(e.document);
 			clearTimeout(pending);
-			pending = setTimeout(() => vscode.window.visibleTextEditors.filter((ed) => ed.document === e.document).forEach(paint), 200);
+			pending = setTimeout(() => {
+				vscode.window.visibleTextEditors.filter((ed) => pendingDocs.has(ed.document)).forEach(paint);
+				pendingDocs.clear();
+			}, 200);
 		}),
 		vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration('labscode.redPen') && paintVisible()),
 	);
