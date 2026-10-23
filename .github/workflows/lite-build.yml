@@ -99,17 +99,29 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then cp lite/install-deps.bat dist/; fi
           chmod +x dist/*.sh 2>/dev/null || true
 
+      # Claude Code is published as one build per platform. /latest without a platform returns
+      # the Linux build, which the Windows zip then shipped ("the installed extension holds the
+      # Linux build instead"), so ask for this leg's target and check what came back.
       - name: Bundle Claude Code extension (from Open VSX)
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           set -e
-          url=$(curl -fsSL https://open-vsx.org/api/anthropic/claude-code/latest | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).files.download))")
+          url=$(curl -fsSL "https://open-vsx.org/api/anthropic/claude-code/$TARGET/latest" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);if(j.targetPlatform!==process.env.TARGET){console.error('Open VSX returned the '+j.targetPlatform+' build of Claude Code, not '+process.env.TARGET);process.exit(1)}console.log(j.files.download)})")
           curl -fsSL "$url" -o claude-code.vsix
           if [ "$RUNNER_OS" = "Windows" ]; then
             ./dist/LabsCode/bin/code-oss.cmd --install-extension claude-code.vsix --extensions-dir dist/LabsCode/data/extensions
           else
             ./dist/LabsCode/bin/code-oss --install-extension claude-code.vsix --extensions-dir dist/LabsCode/data/extensions
           fi
+          # The installed folder is named anthropic.claude-code-<version>-<platform>.
+          ls dist/LabsCode/data/extensions
+          if ls dist/LabsCode/data/extensions | grep '^anthropic\.claude-code-' | grep -qv -- "-$TARGET\$"; then
+            echo "Claude Code for a platform other than $TARGET ended up in the package" >&2
+            exit 1
+          fi
+          ls dist/LabsCode/data/extensions | grep -q -- "^anthropic\.claude-code-.*-$TARGET\$"
 
       - name: Zip
         shell: bash
